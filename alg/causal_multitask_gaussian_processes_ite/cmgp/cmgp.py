@@ -19,6 +19,7 @@ class CMGP:
         Treatments: np.ndarray,
         Y: np.ndarray,
         mode: str = "CMGP",
+        sparse_mode: str = 'none',
         max_gp_iterations: int = 1000,
     ) -> None:
         """
@@ -39,6 +40,7 @@ class CMGP:
         dim = len(X[0])
         dim_outcome = len(np.unique(Y))
 
+        self.sparse_mode = sparse_mode
         self.dim = dim
         self.dim_outcome = dim_outcome
         self.mode = mode
@@ -80,11 +82,13 @@ class CMGP:
         Dataset1 = Dataset[Dataset["T"] == 1].copy()
 
         # Extract data for the first learning task (control population)
-        X0 = np.reshape(Dataset0[Feature_names].copy(), (len(Dataset0), self.dim))
+        X0 = np.reshape(Dataset0[Feature_names].copy(),
+                        (len(Dataset0), self.dim))
         y0 = np.reshape(np.array(Dataset0["Y"].copy()), (len(Dataset0), 1))
 
         # Extract data for the second learning task (treated population)
-        X1 = np.reshape(Dataset1[Feature_names].copy(), (len(Dataset1), self.dim))
+        X1 = np.reshape(Dataset1[Feature_names].copy(),
+                        (len(Dataset1), self.dim))
         y1 = np.reshape(np.array(Dataset1["Y"].copy()), (len(Dataset1), 1))
 
         # Create an instance of a GPy Coregionalization model
@@ -92,17 +96,26 @@ class CMGP:
         K1 = GPy.kern.RBF(self.dim, ARD=True)
 
         kernel_dict = {
-            "CMGP": GPy.util.multioutput.LCM(
-                input_dim=self.dim, num_outputs=self.dim_outcome, kernels_list=[K0, K1]
-            ),
-            "NSGP": GPy.util.multioutput.ICM(
-                input_dim=self.dim, num_outputs=self.dim_outcome, kernel=K0
-            ),
+            "CMGP":
+            GPy.util.multioutput.LCM(input_dim=self.dim,
+                                     num_outputs=self.dim_outcome,
+                                     kernels_list=[K0, K1]),
+            "NSGP":
+            GPy.util.multioutput.ICM(input_dim=self.dim,
+                                     num_outputs=self.dim_outcome,
+                                     kernel=K0),
         }
 
-        self.model = GPy.models.GPCoregionalizedRegression(
-            X_list=[X0, X1], Y_list=[y0, y1], kernel=kernel_dict[self.mode]
-        )
+        if self.sparse_mode == 'sgpr':
+            self.model = GPy.models.SparseGPCoregionalizedRegression(
+                X_list=[X0, X1],
+                Y_list=[y0, y1],
+                kernel=kernel_dict[self.mode])
+        else:
+            self.model = GPy.models.GPCoregionalizedRegression(
+                X_list=[X0, X1],
+                Y_list=[y0, y1],
+                kernel=kernel_dict[self.mode])
 
         self._initialize_hyperparameters(Train_X, Train_T, Train_Y)
 
@@ -123,8 +136,10 @@ class CMGP:
         """
         if self.dim == 1:
             X_ = X[:, None]
-            X_0 = np.hstack([X_, np.reshape(np.array([0] * len(X)), (len(X), 1))])
-            X_1 = np.hstack([X_, np.reshape(np.array([1] * len(X)), (len(X), 1))])
+            X_0 = np.hstack(
+                [X_, np.reshape(np.array([0] * len(X)), (len(X), 1))])
+            X_1 = np.hstack(
+                [X_, np.reshape(np.array([1] * len(X)), (len(X), 1))])
             noise_dict_0 = {"output_index": X_0[:, 1:].astype(int)}
             noise_dict_1 = {"output_index": X_1[:, 1:].astype(int)}
             Y_est_0 = self.model.predict(X_0, Y_metadata=noise_dict_0)[0]
@@ -133,35 +148,30 @@ class CMGP:
         else:
 
             X_0 = np.array(
-                np.hstack([X, np.zeros_like(X[:, 1].reshape((len(X[:, 1]), 1)))])
-            )
+                np.hstack(
+                    [X, np.zeros_like(X[:, 1].reshape((len(X[:, 1]), 1)))]))
             X_1 = np.array(
-                np.hstack([X, np.ones_like(X[:, 1].reshape((len(X[:, 1]), 1)))])
-            )
+                np.hstack(
+                    [X, np.ones_like(X[:, 1].reshape((len(X[:, 1]), 1)))]))
             X_0_shape = X_0.shape
             X_1_shape = X_1.shape
             noise_dict_0 = {
-                "output_index": X_0[:, X_0_shape[1] - 1]
-                .reshape((X_0_shape[0], 1))
-                .astype(int)
+                "output_index":
+                X_0[:, X_0_shape[1] - 1].reshape((X_0_shape[0], 1)).astype(int)
             }
             noise_dict_1 = {
-                "output_index": X_1[:, X_1_shape[1] - 1]
-                .reshape((X_1_shape[0], 1))
-                .astype(int)
+                "output_index":
+                X_1[:, X_1_shape[1] - 1].reshape((X_1_shape[0], 1)).astype(int)
             }
             Y_est_0 = np.array(
-                list(self.model.predict(X_0, Y_metadata=noise_dict_0)[0])
-            )
+                list(self.model.predict(X_0, Y_metadata=noise_dict_0)[0]))
             Y_est_1 = np.array(
-                list(self.model.predict(X_1, Y_metadata=noise_dict_1)[0])
-            )
+                list(self.model.predict(X_1, Y_metadata=noise_dict_1)[0]))
 
         return np.asarray(Y_est_1 - Y_est_0)
 
-    def _initialize_hyperparameters(
-        self, X: np.ndarray, T: np.ndarray, Y: np.ndarray
-    ) -> None:
+    def _initialize_hyperparameters(self, X: np.ndarray, T: np.ndarray,
+                                    Y: np.ndarray) -> None:
         """
         Initializes the multi-tasking model's hyper-parameters before passing to the optimizer
 
@@ -199,15 +209,13 @@ class CMGP:
         Dataset1["Yk0"] = Dataset.loc[Dataset["T"] == 1, "Yk0"]
         Dataset1["Yk1"] = Dataset.loc[Dataset["T"] == 1, "Yk1"]
 
-        a0 = np.sqrt(np.mean((Dataset0["Y"] - np.mean(Dataset0["Y"])) ** 2))
-        a1 = np.sqrt(np.mean((Dataset1["Y"] - np.mean(Dataset1["Y"])) ** 2))
-        b0 = np.mean(
-            (Dataset["Yk0"] - np.mean(Dataset["Yk0"]))
-            * (Dataset["Yk1"] - np.mean(Dataset["Yk1"]))
-        ) / (a0 * a1)
+        a0 = np.sqrt(np.mean((Dataset0["Y"] - np.mean(Dataset0["Y"]))**2))
+        a1 = np.sqrt(np.mean((Dataset1["Y"] - np.mean(Dataset1["Y"]))**2))
+        b0 = np.mean((Dataset["Yk0"] - np.mean(Dataset["Yk0"])) *
+                     (Dataset["Yk1"] - np.mean(Dataset["Yk1"]))) / (a0 * a1)
         b1 = b0
-        s0 = np.sqrt(np.mean((Dataset0["Y"] - Dataset0["Yk0"]) ** 2)) / a0
-        s1 = np.sqrt(np.mean((Dataset1["Y"] - Dataset1["Yk1"]) ** 2)) / a1
+        s0 = np.sqrt(np.mean((Dataset0["Y"] - Dataset0["Yk0"])**2)) / a0
+        s1 = np.sqrt(np.mean((Dataset1["Y"] - Dataset1["Yk1"])**2)) / a1
         # `````````````````````````````````````````````````````
         self.model.sum.ICM0.rbf.lengthscale = 10 * np.ones(self.dim)
         self.model.sum.ICM1.rbf.lengthscale = 10 * np.ones(self.dim)
@@ -220,10 +228,10 @@ class CMGP:
         self.model.sum.ICM1.B.W[0] = b1
         self.model.sum.ICM1.B.W[1] = b1
 
-        self.model.sum.ICM0.B.kappa[0] = a0 ** 2
+        self.model.sum.ICM0.B.kappa[0] = a0**2
         self.model.sum.ICM0.B.kappa[1] = 1e-4
         self.model.sum.ICM1.B.kappa[0] = 1e-4
-        self.model.sum.ICM1.B.kappa[1] = a1 ** 2
+        self.model.sum.ICM1.B.kappa[1] = a1**2
 
-        self.model.mixed_noise.Gaussian_noise_0.variance = s0 ** 2
-        self.model.mixed_noise.Gaussian_noise_1.variance = s1 ** 2
+        self.model.mixed_noise.Gaussian_noise_0.variance = s0**2
+        self.model.mixed_noise.Gaussian_noise_1.variance = s1**2
